@@ -23,7 +23,7 @@ def print_tarefa_completa_info(tarefa:tarefasp.Tarefa, categorias:list):
 
     print(f" - Completa em {round(duracao, 2)} {tempo_str}.")
 
-    if tarefa.tem_secoes():
+    if tarefa.tem_secoes() and tarefa.notas_disponiveis:
         print(util.color("bold", "yellow") + f" * SEÇÕES" + util.RESET_COLOR)
         secoes = tarefasp.cartoes_por_secao(tarefa)
 
@@ -55,9 +55,13 @@ def print_tarefa_completa_info(tarefa:tarefasp.Tarefa, categorias:list):
 
             print(util.cor_da_pontuacao(nota_secao) + f"  - {nomes_das_secoes[i].ljust(maior_nome_secao)}  -  {f"{util.print_numero(nota_secao, hard=4)}"}. {f"{pontuacao_recebida} pontos de {pontuacao_maxima}.".ljust(19)} (-{round(nota_perdida)}%)")
 
-    nota = tarefasp.calcular_nota_tarefa(tarefa)
+    if tarefa.notas_disponiveis:
+        nota = tarefasp.calcular_nota_tarefa(tarefa)
+        print(util.cor_da_pontuacao(nota) + f" - Nota geral: {util.print_numero(nota, hard=4)}. {tarefa.pontuacao_recebida} pontos de {tarefa.pontuacao_maxima}" + util.RESET_COLOR)
 
-    print(util.cor_da_pontuacao(nota) + f" - Nota geral: {util.print_numero(nota, hard=4)}. {tarefa.pontuacao_recebida} pontos de {tarefa.pontuacao_maxima}" + util.RESET_COLOR)
+    else:
+        print(" - Notas ainda não disponíveis!")
+
     print()
 
 def print_tarefa_incompleta_info(tarefa:tarefasp.Tarefa, categorias:list):

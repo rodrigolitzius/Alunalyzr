@@ -54,6 +54,7 @@ class Tarefa:
     autor:str
     expiracao:str
     e_prova:bool
+    notas_disponiveis:bool
 
     # De quais categorias essa tarefa faz parte. (Exemplo: Matemática, português, química, prova paulista...)
     ids_de_categoria:list
@@ -89,6 +90,7 @@ class Tarefa:
             self.expiracao = tarefa["task_expire_at"]
             self.ids_de_categoria = tarefa["task_category_ids"]
             self.e_prova = tarefa["task_is_exam"]
+            self.notas_disponiveis = tarefa["enable_display_answers"]
 
             self._duracao = float(tarefa["duration"])
             self._pontuacao_recebida = tarefa["result_score"]
