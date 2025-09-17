@@ -247,9 +247,10 @@ def obter_tarefas_completas(auth:api.Auth, limite:int):
     tarefas = []
 
     # Quais informações sobre a tarefa pedir a API
+    # Se o parâmetro "revised" não for adicionado, o result_score será sempre 0
     parametros = [
         "id", "task_id", "status", "delivered_at", "result_score", "duration",
-        "task.title", "task.author", "task.is_exam", "task.category_ids", "task.expire_at"
+        "task.title", "task.author", "task.is_exam", "task.category_ids", "task.expire_at", "revised"
     ]
 
     tarefas_json = api.get_completed_tasks(auth, limite, parametros)
