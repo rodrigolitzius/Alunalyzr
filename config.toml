@@ -1,0 +1,6 @@
+[aluno]
+frequencia_minima = 75
+nota_minima = 5
+
+[avancado]
+user_agent = "6767"

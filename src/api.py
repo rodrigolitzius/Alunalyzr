@@ -1,244 +1,217 @@
 import requests as rq
 
-import util
+class Request:
+    session = None
+    def __init__(self, session) -> None:
+        self.session = session
 
-DEFAULT_USER_AGENT = "User Agent"
+    def post(self, *args, **kwargs):
+        resposta = self.session.post(*args, **kwargs)
+        self.checar_resposta(resposta)
+        return resposta
+
+    def get(self, *args, **kwargs):
+        resposta = self.session.get(*args, **kwargs)
+        self.checar_resposta(resposta)
+        return resposta
+
+    def checar_resposta(self, resposta):
+        resposta.raise_for_status()
 
 class Auth:
-    login: str
-    password: str
+    nome:str
+    apelido:str
+    cd_usuario:int
+    token:str
+    token2:str
 
-    name: str # Nome do aluno
-
-    nick: str # Uma combinação do RA e dígito
-    student_code: int
-
-    token1: str # Token dado por LoginCompletoToken
-    token2: str # Dado por Token
-
-    def __init__(self, login, password) -> None:
-        self.login = login
-        self.password = password
-
-        self._login_completo_token()
-        self._token()
-
-    def _login_completo_token(self):
-        request = APIEndpoint(
-            url="https://sedintegracoes.educacao.sp.gov.br/credenciais/api/LoginCompletoToken",
+    def __init__(self, usuario, senha, sessao):
+        resposta = sessao.post(url="https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken",
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-
-                # Aparentemente essa chave é igual pra todo mundo...
-                "Ocp-Apim-Subscription-Key": "2b03c1db3884488795f79c37c069381a"
+                "Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b",
             },
 
             json={
-                "user": self.login,
-                "senha": self.password
+                "user": usuario,
+                "senha": senha
             }
         )
-        
-        response = request.post()
 
-        self.nick = response["DadosUsuario"]["NM_NICK"]
-        self.student_code = response["DadosUsuario"]["CD_USUARIO"]
+        resposta = resposta.json()
 
-        self.token1 = response["token"]
-        self.name = response["DadosUsuario"]["NAME"]
+        self.nome = resposta["DadosUsuario"]["NAME"]
+        self.cd_usuario = int(resposta["DadosUsuario"]["CD_USUARIO"])
+        self.token = resposta["token"]
 
-    def _token(self):
-        request = APIEndpoint(
-            url=f"https://edusp-api.ip.tv/registration/edusp/token",
+        resposta = sessao.post(url="https://edusp-api.ip.tv/registration/edusp/token",
             headers={
                 "Accept": "application/json",
-                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Language": "en-US,en;q=0.9",
                 "content-type": "application/json",
                 "x-api-platform": "webclient",
                 "x-api-realm": "edusp",
-                "Priority": "u=4"
             },
 
             json={
-                "token": self.token1
+                "token": self.token
+            }
+        ).json()
+
+        self.token2 = resposta["auth_token"]
+        self.apelido = resposta["nick"]
+
+    @property
+    def cd_usuario_curto(self):
+        # Por algum motivo alguns endpoints só funcionam com cd_usuarios sem o último dígito
+        return str(self.cd_usuario//10)
+
+class Api:
+    auth = None
+    sessao = None
+    handler = None
+
+    def __init__(self, sessao=rq.Session()) -> None:
+        self.sessao = sessao
+        self.handler = Request(self.sessao)
+
+    def autenticar(self, usuario, senha):
+        self.auth = Auth(usuario, senha, self.handler)
+
+    def get_boletim_completo(self, ano):
+        resposta = self.handler.get(url=f"https://sedintegracoes.educacao.sp.gov.br/apiboletim/api/Boletim/GetBoletimCompleto?codigoAluno={self.auth.cd_usuario_curto}&anoLetivo={ano}&codigoTurma=0",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "ocp-apim-subscription-key": "a84380a41b144e0fa3d86cbc25027fe6",
             }
         )
 
-        response = request.post()
+        return resposta.json()
 
-        self.token2 = response["auth_token"]
-
-    @property
-    def region(self):
-        return self.login[-2:]
-
-class APIEndpoint:
-    url: str
-    headers: dict
-    json: dict
-
-    expected_sc: list
-
-    def __init__(self, url:str, headers:dict, json:dict={}, expected_sc:list=[200], user_agent:str=f"{DEFAULT_USER_AGENT}") -> None:
-        self.url = url
-        self.headers = {
-            "User-Agent": user_agent,
-            **headers
-        }
-        self.json = json
-
-        self.expected_sc = expected_sc
-
-    def post(self) -> dict:
-        response = rq.post(
-            url=self.url,
-            headers=self.headers,
-            json=self.json
+    def obter_aluno_por_codigo(self):
+        resposta = self.handler.get(f"https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/api/Aluno/ObterAlunoPorCodigo?codigoAluno={self.auth.cd_usuario_curto}",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b",
+                "Authorization": f"Bearer {self.auth.token}"
+            }
         )
 
-        self.check_response(response)
+        return resposta.json()
 
-        return response.json()
-
-    def get(self) -> dict:
-        response = rq.get(
-            url=self.url,
-            headers=self.headers,
-            json=self.json
+    def listar_turmas_por_aluno(self):
+        resposta = self.handler.get(f"https://sedintegracoes.educacao.sp.gov.br/apihubintegracoes/api/v2/Turma/ListarTurmasPorAluno?codigoAluno={self.auth.cd_usuario_curto}",
+            headers={
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Ocp-Apim-Subscription-Key": "5936fddda3484fe1aa4436df1bd76dab",
+            }
         )
 
-        self.check_response(response)
+        return resposta.json()
 
-        return response.json()
+    def listar_bimestres(self, escola_id):
+        resposta = self.handler.get(f"https://sedintegracoes.educacao.sp.gov.br/apihubintegracoes/api/v2/Bimestre/ListarBimestres?escolaId={escola_id}",
+            headers={
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Ocp-Apim-Subscription-Key": "5936fddda3484fe1aa4436df1bd76dab"
+            }
+        )
 
-    def check_response(self, response:rq.Response):
-        if not (response.status_code in self.expected_sc):
-            util.print_erro(f"Código de status inexperado: {response.status_code}.", False)
-            util.print_erro(f"URL: {self.url}")
+        return resposta.json()
 
-def lista_para_parametros(nome_parametro:str, parametros:list):
-    string = ""
+    def listar_disciplina_por_aluno(self):
+        resposta = self.handler.get(f"https://sedintegracoes.educacao.sp.gov.br/apihubintegracoes/api/v2/Disciplina/ListarDisciplinaPorAluno?codigoAluno={self.auth.cd_usuario_curto}",
+            headers={
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Ocp-Apim-Subscription-Key": "5936fddda3484fe1aa4436df1bd76dab"
+            }
+        )
 
-    for parametro in parametros:
-        string += f"{nome_parametro}={parametro}&"
+        return resposta.json()
 
-    return string[:len(string)-1]
+    def todo(self, publication_targets, answer_status=[], expired_only=False, limit=100, filter_expired=False, is_exam=False, is_essay=False):
+        publication_targets_str = ""
+        for pub_target in publication_targets:
+            publication_targets_str += f"&publication_target={pub_target}"
 
-def get_completed_tasks(auth:Auth, limit:int, fields:list):
-    endpoint = APIEndpoint(
-        url=f"https://edusp-api.ip.tv/tms/answer?nick={auth.nick}-{auth.region}&limit={str(limit)}&offset=0&status=submitted&status=finished&{lista_para_parametros("fields", fields)}",
-        headers={
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.5",
-            "content-type": "application/json",
-            "x-api-key": auth.token2
-        }
-    )
+        answer_statuses_str = ""
+        for status in answer_status:
+            answer_statuses_str += f"&answer_statuses={status}"
 
-    return endpoint.get()
+        resposta = self.handler.get(f"https://edusp-api.ip.tv/tms/task/todo?expired_only={expired_only}&limit={limit}&offset=0&filter_expired={filter_expired}&is_exam={is_exam}&with_answer=true&is_essay={is_essay}&with_apply_moment=true&{publication_targets_str}&{answer_statuses_str}",
+            headers={
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "content-type": "application/json",
+                "x-api-key": self.auth.token2,
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "cross-site",
+                "Priority": "u=4"
+            },
+        )
 
-def get_disciplines(auth:Auth, ano:int):
-    endpoint = APIEndpoint(
-        url=f"https://sedintegracoes.educacao.sp.gov.br/apihubintegracoes/api/v2/Disciplina/ListarDisciplinaPorAluno?codigoAluno={auth.student_code}",
-        headers={
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Ocp-Apim-Subscription-Key": "5936fddda3484fe1aa4436df1bd76dab"
-        }
-    )
+        return resposta.json()
 
-    return endpoint.get()
+    def user(self):
+        resposta = self.handler.get("https://edusp-api.ip.tv/room/user?list_all=true&with_cards=true",
+            headers={
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "content-type": "application/json",
+                "x-api-key": f"{self.auth.token2}",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "cross-site",
+                "Priority": "u=4"
+            }
+        )
 
-def get_rooms(auth:Auth):
-    endpoint = APIEndpoint(
-        url=f"https://edusp-api.ip.tv/room/user?list_all=true&with_cards=true",
-        headers={
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.5",
-            "content-type": "application/json",
-            "x-api-key": auth.token2,
-        }
-    )
+        return resposta.json()
 
-    return endpoint.get()
+    def categories(self, publication_targets):
+        resposta = self.handler.get("https://edusp-api.ip.tv/tms/task/targets/categories",
+            headers={
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "content-type": "application/json",
+                "x-api-key": f"{self.auth.token2}"
+            },
 
-def get_incomplete_tasks(auth:Auth, publication_targets:str, filter_expired:str, limit:int):
-    expired_only = "true"
+            params={
+                "expired_only": False,
+                "filter_expired": False,
+                "publication_target": publication_targets
+            }
+        )
 
-    if filter_expired == "true":
-        expired_only = "false"
+        return resposta.json()
 
-    endpoint = APIEndpoint(
-        url = f"https://edusp-api.ip.tv/tms/task/todo?expired_only={expired_only}&limit={str(limit)}&offset=0&filter_expired={filter_expired}&{publication_targets}",
-        headers={
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.5",
-            "content-type": "application/json",
-            "x-api-key": auth.token2,
-        }
-    )
+    def answer(self, publication_targets:list):
+        resposta = self.handler.get("https://edusp-api.ip.tv/tms/answer",
+            headers = {
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "content-type": "application/json",
+                "x-api-key": f"{self.auth.token2}",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "cross-site"
+            },
 
-    return endpoint.get()
+            params={
+                "nick": self.auth.apelido,
+                "publication_target": publication_targets,
+                "status": ["finished", "submitted"],
+                # Curiosidade: Não dá pra passar um único field, se não o server retorna 400 e reclama que os fields devem ser um array. bruuuhhhhh
+                "fields": ["task.title", "task.category_ids", "task.author", "task.allow_check_answer"]
+            }
+        )
 
-def get_full_task_data(auth:Auth, task_id, other_id):
-    endpoint = APIEndpoint(
-        url=f"https://edusp-api.ip.tv/tms/task/{task_id}/answer/{other_id}?with_task=true&with_genre=true&with_questions=true&with_assessed_skills=true",
-        headers={
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.5",
-            "content-type": "application/json",
-            "x-api-key": auth.token2,
-        }
-    )
-
-    return endpoint.get()
-
-def get_categories(auth:Auth, publication_targets:str):
-    endpoint = APIEndpoint(
-        url=f"https://edusp-api.ip.tv/tms/task/targets/categories?expired_only=false&filter_expired=false&{publication_targets}",
-        headers={
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.5",
-            "content-type": "application/json",
-            "x-api-key": auth.token2
-        }
-    )
-
-    return endpoint.get()
-
-def get_bulletin(auth:Auth, ano, bimestre):
-    print(auth.student_code)
-    endpoint = APIEndpoint(
-        # O código de usuário (auth.student_code) usado nas requisições não tem o número final por algum motivo...
-        url=f"https://sedintegracoes.educacao.sp.gov.br/apiboletim/api/Frequencia/ConsultaFrequenciaBimestre?codigoAluno={int(auth.student_code/10)}&anoLetivo={ano}&bimestre={bimestre}&somenteAtivo=0",
-        headers={
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Ocp-Apim-Subscription-Key": "a84380a41b144e0fa3d86cbc25027fe6",
-        }
-    )
-
-    return endpoint.get()
-
-def get_full_bulletin(auth:Auth, ano:int, codigo_turma:int):
-    endpoint = APIEndpoint(
-        url=f"https://sedintegracoes.educacao.sp.gov.br/apiboletim/api/Boletim/GetBoletimCompleto?codigoAluno={int(auth.student_code/10)}&anoLetivo={ano}&codigoTurma={codigo_turma}",
-        headers={
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Ocp-Apim-Subscription-Key": "a84380a41b144e0fa3d86cbc25027fe6",
-        }
-    )
-
-    return endpoint.get()
-
-def get_last_missed_days(auth:Auth, ano:int):
-    endpoint = APIEndpoint(
-        url=f"https://sedintegracoes.educacao.sp.gov.br/apiboletim/api/Frequencia/GetAlunoUltimosDiasFalta?codigoAluno={int(auth.student_code/10)}&anoLetivo={ano}",
-        headers={
-            "Ocp-Apim-Subscription-Key": "a84380a41b144e0fa3d86cbc25027fe6",
-        },
-    )
-
-    return endpoint.get()
+        return resposta.json()

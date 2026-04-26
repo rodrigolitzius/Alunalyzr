@@ -1,90 +1,157 @@
-import json
 import argparse
-import pickle
+import json
+from sys import stderr
 
-import api
+import pandas as pd
+from requests_cache.session import CachedSession
 
-from modulos.tarefa_sp import tarefasp
-from modulos.tarefa_sp import print_tarefasp
+from api import Api
+from mod import boletim
+from mod import info
+from mod import bimestres
+from mod import disciplinas
+from mod import tarefasp
 
-from modulos.boletim import boletim
-from modulos.boletim import print_boletim
+from config import config
 
-import util
+# TODO Handle IsSuccess = False case for all modules
 
-caminho_para_auths_padrao = "./auths.json"
+class CachedSessionForcarRefresh(CachedSession):
+    def request(self, *args, **kwargs):
+        kwargs["force_refresh"] = True
+        return super().request(*args, **kwargs)
 
-def valores_separados_por_virgula(value):
-    return [x.strip().lower() for x in value.split(",")]
+    def post(self, *args, **kwargs):
+        kwargs["force_refresh"] = True
+        return super().post(*args, **kwargs)
 
-def modulo_tarefas(args:argparse.Namespace):
-    print("Listando salas...")
-    salas = tarefasp.obter_salas(auth)
+def modulo_boletim(args):
+    boletim_json = api.get_boletim_completo(args.ano)
 
-    alvos_de_pub = tarefasp.obter_alvos_de_publicacao(salas)
+    if boletim_json["data"] == []:
+        print("Boletim vazio", file=stderr)
+        return
 
-    print("Listando disciplinas/categorias")
-    categorias = tarefasp.obter_categorias(auth, alvos_de_pub)
+    # Sim, "Success" está escrito errado...
+    if not boletim_json["isSucess"]:
+        print(f'Erro ao obter boletim: "{boletim_json["message"]}"', file=stderr)
+        return
 
-    print("Listando tarefas...")
-    tarefas_completas = tarefasp.obter_tarefas_completas(auth, args.req_tarefas)[::-1]
-    tarefas_incompletas = tarefasp.obter_tarefas_incompletas(auth, alvos_de_pub, args.req_tarefas, "true")[::-1]
-    tarefas_expiradas = tarefasp.obter_tarefas_incompletas(auth, alvos_de_pub, args.req_tarefas, "false")[::-1]
+    df = pd.DataFrame(boletim_json["data"])
 
-    print("Abrindo tarefas...")
-    for tarefa in tarefas_completas:
-        tarefa.abrir(auth)
+    boletim.print_boletim(df)
 
-    print_tarefasp.print_tarefasp(auth, args.exibir, tarefas_completas, tarefas_incompletas, tarefas_expiradas, categorias)
+def modulo_info_pessoal(args):
+    info_json = api.obter_aluno_por_codigo()
 
-def modulo_boletim(args:argparse.Namespace):
-    print("Obtendo boletim...")
-    boletim_json = api.get_full_bulletin(auth, args.ano, 0)["data"]
+    if not info_json["isSuccess"]:
+        print("ObterAlunoPorCodigo falhou:", info_json["message"])
+        return
 
-    print_boletim.print_boletim(args, boletim_json)
+    info.print_info_pessoal(info_json["data"])
+
+def modulo_bimestres(args):
+    turmas = obter_turmas()
+
+    for escola_id in pd.unique(turmas["CodigoEscola"]):
+        bimestres_json = api.listar_bimestres(escola_id)["data"]
+
+        bimestres.print_bimestres(bimestres_json, turmas[turmas["CodigoEscola"] == escola_id].iloc[0])
+
+def modulo_disciplinas(args):
+    disciplinas.print_disciplinas(pd.DataFrame(api.listar_disciplina_por_aluno()["data"]))
+
+def obter_turmas():
+    df = pd.DataFrame(api.listar_turmas_por_aluno()["data"])
+    return df
+
+def modulo_tarefasp(args):
+    publication_targets = obter_publication_targets(obter_usuario())
+    categorias = api.categories(publication_targets)
+    expiradas_e_pendentes = pd.DataFrame(api.todo(publication_targets, answer_status=["draft", "pending"]))
+    completas = pd.DataFrame(api.answer(publication_targets))
+
+    tarefasp.print_tarefasp(expiradas_e_pendentes, completas, categorias)
+
+def obter_usuario():
+    return api.user()
+
+def obter_publication_targets(user):
+    lista = []
+    for room in user["rooms"]:
+        lista.append(room["name"])
+        for group_cat in room["group_categories"]:
+            lista.append(group_cat["id"])
+
+    return lista
+
+def resposta_hook(r):
+    print(r.url)
+
+with open("./usuarios.json", "r") as file:
+    usuarios = json.load(file)
 
 parser = argparse.ArgumentParser(
-    prog="Sala do Futuro",
-    description="ferramenta que acessa automaticamente a plataforma Sala do Futuro, coleta os dados do aluno e os transforma em informações claras e úteis sobre o desempenho escolar."
+    prog="sdf", description="Coleta dados da Sala do Futuro"
+)
+parser.add_argument(
+    "aluno",
+    help="O nome do aluno, como especificado em usuarios.json",
+    choices=usuarios.keys(),
+)
+parser.add_argument(
+    "-c",
+    "--cached",
+    help="Prefere o cache se disponível",
+    action="store_true",
+    dest="cache",
 )
 
-parser.add_argument("-a", "--auths",
-    default=caminho_para_auths_padrao, required=False,
-    help="Caminho para o arquivo de logins (auths.json)"
+parser.add_argument(
+    "-f",
+    "--offline",
+    help="utiliza apenas o cache. Pode causar erros se os dados armazenados forem inválidos",
+    action="store_true",
+    dest="offline",
 )
 
-parser.add_argument("auth",
-    help="Um nome de um aluno configurado em auths.json. (caso --auths não seja especificado)"
-)
+subparsers = parser.add_subparsers()
 
-subparsers = parser.add_subparsers(required=True)
-
-tarefas_parser = subparsers.add_parser("tarefas", help="Coleta informações do TarefaSP")
-tarefas_parser.set_defaults(func=modulo_tarefas)
-
-tarefas_parser.add_argument("-e", "--exibir", required=True, type=valores_separados_por_virgula, 
-    help="Lista de opções separadas por uma vírgula. Opções: completas,incompletas,expiradas,provas,media"
-)
-
-tarefas_parser.add_argument("-n", "--requisitar-tarefas", default=100, dest="req_tarefas", type=int, 
-    help="O número de tarefas a serem requisitadas da Sala do Futuro. Não altere esse valor sem compreender o código, caso contrário algumas tarefas podem não aparecer."
-)
-
-boletim_parser = subparsers.add_parser("boletim", help="Coleta informações do boletim")
+boletim_parser = subparsers.add_parser("boletim", help="Mostra o boletim do aluno")
 boletim_parser.set_defaults(func=modulo_boletim)
 boletim_parser.add_argument("ano")
 
+info_pessoal_parser = subparsers.add_parser("info", help="Mostra informações pessoais do aluno")
+info_pessoal_parser.set_defaults(func=modulo_info_pessoal)
+
+disciplinas_parser = subparsers.add_parser("bimestres")
+disciplinas_parser.set_defaults(func=modulo_bimestres)
+
+disciplinas_parser = subparsers.add_parser("disciplinas")
+disciplinas_parser.set_defaults(func=modulo_disciplinas)
+
+tarefasp_parser = subparsers.add_parser("tarefasp")
+tarefasp_parser.set_defaults(func=modulo_tarefasp)
+
 args = parser.parse_args()
 
-auths = {}
-with open(args.auths, "r") as f:
-    auths = json.load(f)
+if (args.cache) or (args.offline):
+    sessao_classe = CachedSession
+else:
+    sessao_classe = CachedSessionForcarRefresh
 
-if not (args.auth in auths.keys()):
-    util.print_erro(f"O aluno {args.auth} não existe em auths.json.")
-    exit(1)
+sessao = sessao_classe(
+    "http_cache",
+    backend="sqlite",
+    allowable_methods=("GET", "POST"),
+)
 
-print("Autenticando...")
-auth = api.Auth(*auths[args.auth])
+sessao.settings.read_only = args.offline
+sessao.settings.only_if_cached = args.offline
+
+sessao.headers.update({"User-Agent": config["avancado"]["user_agent"]})
+
+api = Api(sessao)
+api.autenticar(*usuarios[args.aluno])
 
 args.func(args)

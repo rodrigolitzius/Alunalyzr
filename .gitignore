@@ -1,2 +1,5 @@
-__pycache__
-run.sh
+usuarios.json
+http_cache.sqlite
+.venv
+src/__pycache__
+src/mod/__pycache__
